@@ -1,5 +1,5 @@
 #py -m venv venv
-#venv\Scripts\activate
+#.\venv\Scripts\activate
 
 from queries.orm import SyncORM
 
