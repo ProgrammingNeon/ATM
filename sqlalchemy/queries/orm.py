@@ -96,6 +96,8 @@ class SyncORM:
             print("2 - Зняти гроші")
             print("3 - Показати баланс")
             print("4 - Конвертувати валюту")
+            print("5 - Переказ між рахунками")
+
             print("0 - Вийти")
 
             choice = input("> ")
@@ -120,6 +122,8 @@ class SyncORM:
                 print(f"💰 Баланс: {account.balance} {account.currency}")
             elif choice == "4":
                 SyncORM.convert_and_transfer(session, account)
+            elif choice == "5":
+                SyncORM.transfer_between_accounts(session, account)
 
             elif choice == "0":
                 break
@@ -233,6 +237,58 @@ class SyncORM:
             session.commit()
 
             print("✅ Рахунок успішно видалено")
+
+
+
+
+
+
+
+
+    @staticmethod
+    def transfer_between_accounts(session, from_account):
+        print("\n=== Переказ між рахунками ===")
+
+        target_login = input("Логін отримувача: ")
+        target_account = session.query(Account).filter_by(login=target_login).first()
+
+        if not target_account:
+            print("❌ Рахунок отримувача не знайдено")
+            return
+
+        if target_account.id == from_account.id:
+            print("❌ Неможливо переказати самому собі")
+            return
+
+        if target_account.currency != from_account.currency:
+            print("❌ Валюти рахунків різні (конвертація не дозволена)")
+            return
+
+        amount = Decimal(input(f"Сума переказу ({from_account.currency}): "))
+
+        if amount <= 0:
+            print("❌ Некоректна сума")
+            return
+
+        if amount > from_account.balance:
+            print("❌ Недостатньо коштів")
+            return
+
+        from_account.balance -= amount
+        target_account.balance += amount
+        session.commit()
+
+        print(
+            f"✅ Переказ успішний: {amount} {from_account.currency} → {target_account.login}"
+        )
+
+
+
+
+
+
+
+
 
 
 

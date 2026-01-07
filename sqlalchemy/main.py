@@ -10,5 +10,7 @@ def try_convert():
     except Exception as e:
         print(f"❌ Не вдалося отримати курс: {e}")
 
+
+
 if __name__ == "__main__":
     SyncORM.main()
