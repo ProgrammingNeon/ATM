@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 
 from database import Base, session_factory, sync_engine
 import keyboards as kb
-from models import Account
+from models import Account, Transaction
 from states import RegStates, AuthStates, ActionStates, UserState, TransferStates
 
 
@@ -27,6 +27,35 @@ user = Router()
 #   ВАЖЛИВІ ФУНКЦІЇ     #
 #########################
     
+
+async def log_transaction(
+    session,
+    account_id: int,
+    login: str,
+    type_: str,
+    amount: Decimal,
+    balance: Decimal,
+    currency: str,
+    related_account: str | None = None
+    
+):
+    tx = Transaction(
+        account_id=account_id,
+        login=login,
+        type=type_,
+        amount=amount,
+        balance=balance,
+        currency=currency,
+        related_account=related_account
+    )
+    session.add(tx)
+    session.commit()
+
+
+
+
+
+
 def get_rate(frm: str, to: str) -> Decimal:   
     r = requests.get(f"{EXCHANGE_API_URL}{frm}").json()
     if r.get("result") != "success":
@@ -215,6 +244,16 @@ async def deposit_finish(msg: types.Message, state: FSMContext):
     
     await check_balance(msg=msg, state=state)
 
+    await log_transaction(
+        session,
+        acc.account_id,
+        acc.login,
+        "deposit",
+        amount,
+        acc.balance,
+        acc.currency
+    )   
+
 
 
 # --- РАНДОМНЕ ПОПОВНЕННЯ ---
@@ -234,7 +273,15 @@ async def deposit_start(msg: types.Message, state: FSMContext):
 
     await check_balance(msg=msg, state=state)
 
-
+    await log_transaction(
+        session,
+        acc.id,
+        acc.login,
+        "deposit",
+        amount,
+        acc.balance,
+        acc.currency
+    ) 
 
 
 # --- ЗНЯТТЯ ---
@@ -259,6 +306,7 @@ async def withdraw_finish(msg: types.Message, state: FSMContext):
         acc = session.get(Account, data["account_id"])
         if amount <= 0 or amount > acc.balance:
             await msg.answer("❌ Недостатньо коштів", reply_markup=kb.account_kb)
+            await state.set_state(UserState.main_menu)
             return
 
         acc.balance -= amount
@@ -270,7 +318,15 @@ async def withdraw_finish(msg: types.Message, state: FSMContext):
     await check_balance(msg=msg, state=state)
 
 
-
+    await log_transaction(
+        session,
+        acc.id,
+        acc.login,
+        "withdraw",
+        amount,
+        acc.balance,
+        acc.currency
+    ) 
 
 
 
@@ -343,12 +399,14 @@ async def transfer_target(msg: types.Message, state: FSMContext):
 @user.message(TransferStates.amount)
 async def transfer_finish(msg: types.Message, state: FSMContext):
     if not msg.text.replace(".", "", 1).isdigit():
-        await msg.answer("Введіть коректну суму")
+        await msg.answer("❌ Невірне число", reply_markup=kb.account_kb)
+        await state.set_state(UserState.main_menu)
         return
 
     amount = Decimal(msg.text)
     if amount <= 0:
-        await msg.answer("Сума має бути більшою за 0")
+        await msg.answer("❌ Сума має бути більшою за 0", reply_markup=kb.account_kb)
+        await state.set_state(UserState.main_menu)
         return
 
     data = await state.get_data()
@@ -383,6 +441,74 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
         )
 
     await state.set_state(UserState.main_menu)
+
+    await log_transaction(
+        session,
+        sender.id,
+        sender.login,
+        "transfer_out",
+        amount,
+        sender.balance,
+        sender.currency,
+        receiver.login
+    )
+
+    await log_transaction(
+        session,
+        receiver.id,
+        receiver.login,
+        "transfer_in",
+        final_amount,
+        receiver.balance,
+        receiver.currency,
+        sender.login
+    )
+
+
+
+
+
+
+
+
+
+@user.message(F.text == "📜 Історія", UserState.main_menu)
+async def history(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+
+    with session_factory() as session:
+        txs = (
+            session.query(Transaction)
+            .filter_by(account_id=data["account_id"])
+            .order_by(Transaction.created_at.desc())
+            .limit(13)
+            .all()
+        )
+
+    if not txs:
+        await msg.answer("Історія порожня")
+        return
+
+    text = "📜 Останні транзакції:\n\n"
+
+    for tx in txs:
+        text += (
+            f"{tx.created_at:%d.%m %H:%M} | "
+            f"{tx.type} | "
+            f"{tx.amount} {tx.currency}"
+        )
+        if tx.related_account:
+            text += f" → {tx.related_account}"
+        text += "\n"
+
+    await msg.answer(text)
+
+
+
+
+
+
+
 
 
 

@@ -17,7 +17,8 @@ account_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="❌ Видалити рахунок")],
         [KeyboardButton(text="➕ Поповнити"), KeyboardButton(text="➖ Зняти"), KeyboardButton(text="➕ Поповнити (рандомне: 1-100)")],
         [KeyboardButton(text="🔁 Переказ")],
-        [KeyboardButton(text="🚪 Вийти")]
+        [KeyboardButton(text="📜 Історія"),KeyboardButton(text="🚪 Вийти")],
+        
     ],
     resize_keyboard=True
 )

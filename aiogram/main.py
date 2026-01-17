@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 from handlers import user
 
+from database import Base
+from database import sync_engine
 
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
@@ -26,6 +28,9 @@ if __name__ == "__main__":
         dp = Dispatcher(storage=MemoryStorage())    
         dp.include_router(user)
         
+        #Base.metadata.drop_all(sync_engine)
+        #Base.metadata.create_all(sync_engine)
+ 
         asyncio.run(main())
     except (KeyboardInterrupt):
         print("Bot stopped")
