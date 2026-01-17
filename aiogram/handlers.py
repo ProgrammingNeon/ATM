@@ -1,7 +1,5 @@
 from decimal import Decimal
 import asyncio
-import requests
-import os
 import random
 
 from aiogram import types, Router, F
@@ -14,67 +12,25 @@ from database import Base, session_factory, sync_engine
 import keyboards as kb
 from models import Account, Transaction
 from states import RegStates, AuthStates, ActionStates, UserState, TransferStates
+from services.security import hash_password, verify_password
+from services.functions import get_rate, log_transaction
 
 
-EXCHANGE_API_URL = "https://open.er-api.com/v6/latest/"
+
+
 user = Router()
 
 
 
 
-
 #########################
-#   ВАЖЛИВІ ФУНКЦІЇ     #
+#        ПОЧАТОК        #
 #########################
-    
-
-async def log_transaction(
-    session,
-    account_id: int,
-    login: str,
-    type_: str,
-    amount: Decimal,
-    balance: Decimal,
-    currency: str,
-    related_account: str | None = None
-    
-):
-    tx = Transaction(
-        account_id=account_id,
-        login=login,
-        type=type_,
-        amount=amount,
-        balance=balance,
-        currency=currency,
-        related_account=related_account
-    )
-    session.add(tx)
-    session.commit()
-
-
-
-
-
-
-def get_rate(frm: str, to: str) -> Decimal:   
-    r = requests.get(f"{EXCHANGE_API_URL}{frm}").json()
-    if r.get("result") != "success":
-        raise Exception("API error")
-    return Decimal(r["rates"][to])
-
-
-
-
-
-# --- ВХІД ---
 
 @user.message(Command("start"))
 async def start(msg: types.Message, state: FSMContext):
     await state.clear() 
     await msg.answer("🏦 ATM Bot v2.0.0 вітає вас!", reply_markup=kb.main_kb)
-
-
-
 
 
 
@@ -113,7 +69,7 @@ async def reg_finish(msg: types.Message, state: FSMContext):
     with session_factory() as session:
         new_acc = Account(
             login=user_data['login'],
-            password=user_data['password'],
+            password=hash_password(user_data['password']),
             currency=msg.text.upper(),
             balance=0
         )
@@ -152,9 +108,9 @@ async def login_finish(msg: types.Message, state: FSMContext):
     data = await state.get_data()
     
     with session_factory() as session:
-        acc = session.query(Account).filter_by(login=data['login'], password=msg.text).first()
+        acc = session.query(Account).filter_by(login=data['login']).first()
         
-        if acc:
+        if acc and verify_password(msg.text, acc.password):
             # Зберігаємо ID акаунта
             await state.update_data(account_id=acc.id)
             
@@ -256,6 +212,9 @@ async def deposit_finish(msg: types.Message, state: FSMContext):
 
 
 
+
+
+
 # --- РАНДОМНЕ ПОПОВНЕННЯ ---
 
 @user.message(F.text == "➕ Поповнити (рандомне: 1-100)", UserState.main_menu)
@@ -282,6 +241,9 @@ async def deposit_start(msg: types.Message, state: FSMContext):
         acc.balance,
         acc.currency
     ) 
+
+
+
 
 
 # --- ЗНЯТТЯ ---
@@ -349,20 +311,22 @@ async def delete_confirm_1(msg: types.Message, state: FSMContext):
         return
 
     await state.set_state(ActionStates.delete_confirm_2)
-    await msg.answer("⚠️ Підтвердіть ще раз: DELETE")
+    await msg.answer("⚠️ Напишіть пароль для підтвердження:")
 
 
 @user.message(ActionStates.delete_confirm_2)
 async def delete_confirm_2(msg: types.Message, state: FSMContext):
-    if msg.text != "DELETE":
-        await msg.answer("❌ Скасовано", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
-        return
-
-    data = await state.get_data()
-    
     with session_factory() as session:
+        data = await state.get_data()
         acc = session.get(Account, data["account_id"])
+
+
+        if not verify_password(msg.text, acc.password):
+            await msg.answer("❌ Скасовано, невірний пароль", reply_markup=kb.account_kb)
+            await state.set_state(UserState.main_menu)
+            return
+
+    
         session.delete(acc)
         session.commit()
 
@@ -416,11 +380,13 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
         receiver = session.query(Account).filter_by(login=data["target_login"]).first()
 
         if not receiver:
-            await msg.answer("❌ Отримувача не знайдено")
+            await msg.answer("❌ Отримувача не знайдено", reply_markup=kb.account_kb)
+            await state.set_state(UserState.main_menu)
             return
 
         if sender.balance < amount:
-            await msg.answer("❌ Недостатньо коштів")
+            await msg.answer("❌ Недостатньо коштів", reply_markup=kb.account_kb)
+            await state.set_state(UserState.main_menu)
             return
 
         final_amount = Decimal(amount)
@@ -470,7 +436,7 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
 
 
 
-
+# --- Історія транзакцій --- 
 
 @user.message(F.text == "📜 Історія", UserState.main_menu)
 async def history(msg: types.Message, state: FSMContext):
@@ -517,7 +483,7 @@ async def history(msg: types.Message, state: FSMContext):
 
 
 
-
+#--- Невідома команда ---
 
 @user.message(F.text, UserState.main_menu)
 async def logout(msg: types.Message, state: FSMContext):
