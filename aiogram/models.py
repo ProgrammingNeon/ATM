@@ -6,9 +6,10 @@ from sqlalchemy import (
     Table,
     Column,
     Integer
-
+    
 )
 
+from sqlalchemy.orm import relationship
 
 from sqlalchemy.orm import Mapped, mapped_column
 from database import Base
@@ -31,22 +32,30 @@ class Account(Base):
     currency = Column(String(10), nullable=False)
     balance = Column(Numeric(12, 2), default=0)
 
-
+    transactions = relationship(
+        "Transaction",
+        passive_deletes=True
+    )
 
 class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
-    
+
+
+    account_id = Column(
+        Integer,
+        ForeignKey("accounts.id", ondelete="SET NULL"),
+        nullable=True
+    )
+
     login = Column(String(50), nullable=False)
     type = Column(String(20), nullable=False)
-    
+
     amount = Column(Numeric(12, 2), nullable=False)
     balance = Column(Numeric(12, 2), nullable=False)
 
     currency = Column(String(10), nullable=False)
-
     related_account = Column(String(50), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

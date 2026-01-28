@@ -13,7 +13,7 @@ import keyboards as kb
 from models import Account, Transaction
 from states import RegStates, AuthStates, ActionStates, UserState, TransferStates
 from services.security import hash_password, verify_password
-from services.functions import get_rate, log_transaction
+from services.functions import get_rate, log_transaction, SUPPORTED_CURRENCIES, finish_registration
 
 
 
@@ -29,8 +29,9 @@ user = Router()
 
 @user.message(Command("start"))
 async def start(msg: types.Message, state: FSMContext):
-    await state.clear() 
-    await msg.answer("🏦 ATM Bot v2.0.0 вітає вас!", reply_markup=kb.main_kb)
+    await state.clear()
+    await state.set_state(UserState.before_loggin)
+    await msg.answer("🏦 ATM Bot v2.0.0 вітає вас!", reply_markup=kb.before_loggin_kb)
 
 
 
@@ -43,9 +44,12 @@ async def start(msg: types.Message, state: FSMContext):
 #       ДО ВХОДУ        #
 #########################
 
+
+
+
 # --- БЛОК РЕЄСТРАЦІЇ ---
 
-@user.message(F.text == "➕ Реєстрація")
+@user.message(F.text == "➕ Реєстрація", UserState.before_loggin)
 async def reg_start(msg: types.Message, state: FSMContext):
     await state.set_state(RegStates.login)
     await msg.answer("📝 Введіть бажаний логін:")
@@ -56,30 +60,37 @@ async def reg_login(msg: types.Message, state: FSMContext):
     await state.set_state(RegStates.password)
     await msg.answer("🔑 Введіть пароль:")
 
+
 @user.message(RegStates.password)
 async def reg_password(msg: types.Message, state: FSMContext):
     await state.update_data(password=msg.text)
     await state.set_state(RegStates.currency)
-    await msg.answer("💱 Оберіть валюту (USD, EUR, UAH):")
+    await msg.answer(
+        f"💱 Оберіть валюту рахунку або введіть вручну з: {', '.join(SUPPORTED_CURRENCIES)}::",
+        reply_markup=kb.currency_inline_kb
+    )
+
+
+
+@user.callback_query(RegStates.currency, F.data.startswith("currency_"))
+async def reg_currency_inline(call: types.CallbackQuery, state: FSMContext):
+    currency = call.data.split("_")[1]
+
+    await finish_registration(
+        msg=call.message,
+        state=state,
+        currency=currency
+    )
+
+    await call.answer()
 
 @user.message(RegStates.currency)
 async def reg_finish(msg: types.Message, state: FSMContext):
-    user_data = await state.get_data()
-    
-    with session_factory() as session:
-        new_acc = Account(
-            login=user_data['login'],
-            password=hash_password(user_data['password']),
-            currency=msg.text.upper(),
-            balance=0
-        )
-        session.add(new_acc)
-        session.commit()
-    
-    await msg.answer(f"✅ Рахунок для {user_data['login']} створено!", reply_markup=kb.main_kb)
-    await state.clear()
-
-
+    await finish_registration(
+        msg=msg,
+        state=state,
+        currency=msg.text.upper()
+    )
 
 
 
@@ -92,7 +103,7 @@ async def reg_finish(msg: types.Message, state: FSMContext):
 
 # --- БЛОК ВХОДУ ---
 
-@user.message(F.text == "🔑 Вхід")
+@user.message(F.text == "🔑 Вхід", UserState.before_loggin)
 async def login_start(msg: types.Message, state: FSMContext):
     await state.set_state(AuthStates.login)
     await msg.answer("👤 Введіть логін:")
@@ -111,16 +122,15 @@ async def login_finish(msg: types.Message, state: FSMContext):
         acc = session.query(Account).filter_by(login=data['login']).first()
         
         if acc and verify_password(msg.text, acc.password):
-            # Зберігаємо ID акаунта
             await state.update_data(account_id=acc.id)
             
-            # ВАЖЛИВО: Переводимо користувача у нейтральний стан
-            await state.set_state(UserState.main_menu) 
+            await state.set_state(UserState.after_loggin) 
             
-            await msg.answer(f"✅ Вітаємо, {acc.login}!", reply_markup=kb.account_kb)
+            await msg.answer(f"✅ Вітаємо, {acc.login}!", reply_markup=kb.after_loggin_kb)
         else:
-            await msg.answer("❌ Помилка: логін або пароль невірні", reply_markup=kb.main_kb)
+            await msg.answer("❌ Помилка: логін або пароль невірні", reply_markup=kb.before_loggin_kb)
             await state.clear()
+            await state.set_state(UserState.before_loggin)
 
 
 
@@ -135,17 +145,18 @@ async def login_finish(msg: types.Message, state: FSMContext):
 
 # --- ВИЙТИ З АКАУНТА---
 
-@user.message(F.text == "🚪 Вийти", UserState.main_menu)
+@user.message(F.text == "🚪 Вийти", UserState.after_loggin)
 async def logout(msg: types.Message, state: FSMContext):
     await state.clear()
-    await msg.answer("Ви вийшли з акаунта", reply_markup=kb.main_kb)
+    await state.set_state(UserState.before_loggin)
+    await msg.answer("Ви вийшли з акаунта", reply_markup=kb.before_loggin_kb)
 
 
 
 
 # --- Баланс ---
 
-@user.message(F.text == "💰 Баланс", UserState.main_menu)
+@user.message(F.text == "💰 Баланс", UserState.after_loggin)
 async def check_balance(msg: types.Message, state: FSMContext):
     #await check_balancef(msg=msg, state=state)
     
@@ -168,7 +179,7 @@ async def check_balance(msg: types.Message, state: FSMContext):
 
 # --- ПОПОВНЕННЯ ---
 
-@user.message(F.text == "➕ Поповнити", UserState.main_menu)
+@user.message(F.text == "➕ Поповнити", UserState.after_loggin)
 async def deposit_start(msg: types.Message, state: FSMContext):
     await state.set_state(ActionStates.deposit_amount)
     await msg.answer("👉 Введіть суму поповнення:")
@@ -177,15 +188,15 @@ async def deposit_start(msg: types.Message, state: FSMContext):
 @user.message(ActionStates.deposit_amount)
 async def deposit_finish(msg: types.Message, state: FSMContext):
     if not msg.text.replace(".", "", 1).isdigit():
-        await msg.answer("❌ Невірне число", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Невірне число", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     amount = Decimal(msg.text)
     
     if amount <= 0:
-        await msg.answer("❌ Сума має бути більшою за 0", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Сума має бути більшою за 0", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     data = await state.get_data()
@@ -194,15 +205,15 @@ async def deposit_finish(msg: types.Message, state: FSMContext):
         acc.balance += amount
         session.commit()
 
-    await msg.answer("✅ Рахунок поповнено", reply_markup=kb.account_kb)
-    await state.set_state(UserState.main_menu)
+    await msg.answer("✅ Рахунок поповнено", reply_markup=kb.after_loggin_kb)
+    await state.set_state(UserState.after_loggin)
     
     
     await check_balance(msg=msg, state=state)
 
     await log_transaction(
         session,
-        acc.account_id,
+        acc.id,
         acc.login,
         "deposit",
         amount,
@@ -217,7 +228,7 @@ async def deposit_finish(msg: types.Message, state: FSMContext):
 
 # --- РАНДОМНЕ ПОПОВНЕННЯ ---
 
-@user.message(F.text == "➕ Поповнити (рандомне: 1-100)", UserState.main_menu)
+@user.message(F.text == "➕ Поповнити (рандомне: 1-100)", UserState.after_loggin)
 async def deposit_start(msg: types.Message, state: FSMContext):
     amount = Decimal(random.randint(1, 100))
     data = await state.get_data()
@@ -226,9 +237,9 @@ async def deposit_start(msg: types.Message, state: FSMContext):
         acc.balance += amount
         session.commit()
     
-        await msg.answer(f"✅ Рахунок поповнено на {amount} {acc.currency}", reply_markup=kb.account_kb)
+        await msg.answer(f"✅ Рахунок поповнено на {amount} {acc.currency}", reply_markup=kb.after_loggin_kb)
 
-    await state.set_state(UserState.main_menu)
+    await state.set_state(UserState.after_loggin)
 
     await check_balance(msg=msg, state=state)
 
@@ -248,7 +259,7 @@ async def deposit_start(msg: types.Message, state: FSMContext):
 
 # --- ЗНЯТТЯ ---
 
-@user.message(F.text == "➖ Зняти", UserState.main_menu)
+@user.message(F.text == "➖ Зняти", UserState.after_loggin)
 async def withdraw_start(msg: types.Message, state: FSMContext):
     await state.set_state(ActionStates.withdraw_amount)
     await msg.answer("👉 Введіть суму зняття:")
@@ -257,8 +268,8 @@ async def withdraw_start(msg: types.Message, state: FSMContext):
 @user.message(ActionStates.withdraw_amount)
 async def withdraw_finish(msg: types.Message, state: FSMContext):
     if not msg.text.replace(".", "", 1).isdigit():
-        await msg.answer("❌ Невірне число", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Невірне число", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     amount = Decimal(msg.text)
@@ -267,15 +278,15 @@ async def withdraw_finish(msg: types.Message, state: FSMContext):
     with session_factory() as session:
         acc = session.get(Account, data["account_id"])
         if amount <= 0 or amount > acc.balance:
-            await msg.answer("❌ Недостатньо коштів", reply_markup=kb.account_kb)
-            await state.set_state(UserState.main_menu)
+            await msg.answer("❌ Недостатньо коштів", reply_markup=kb.after_loggin_kb)
+            await state.set_state(UserState.after_loggin)
             return
 
         acc.balance -= amount
         session.commit()
 
-    await msg.answer("✅ Кошти знято", reply_markup=kb.account_kb)
-    await state.set_state(UserState.main_menu)
+    await msg.answer("✅ Кошти знято", reply_markup=kb.after_loggin_kb)
+    await state.set_state(UserState.after_loggin)
 
     await check_balance(msg=msg, state=state)
 
@@ -297,7 +308,7 @@ async def withdraw_finish(msg: types.Message, state: FSMContext):
 
 # --- ВИДАЛЕННЯ РАХУНКУ ---
 
-@user.message(F.text == "❌ Видалити рахунок", UserState.main_menu)
+@user.message(F.text == "❌ Видалити рахунок", UserState.after_loggin)
 async def delete_start(msg: types.Message, state: FSMContext):
     await state.set_state(ActionStates.delete_confirm_1)
     await msg.answer("⚠️ Введіть DELETE для підтвердження")
@@ -306,8 +317,8 @@ async def delete_start(msg: types.Message, state: FSMContext):
 @user.message(ActionStates.delete_confirm_1)
 async def delete_confirm_1(msg: types.Message, state: FSMContext):
     if msg.text != "DELETE":
-        await msg.answer("❌ Скасовано", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Скасовано", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     await state.set_state(ActionStates.delete_confirm_2)
@@ -316,22 +327,64 @@ async def delete_confirm_1(msg: types.Message, state: FSMContext):
 
 @user.message(ActionStates.delete_confirm_2)
 async def delete_confirm_2(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+
     with session_factory() as session:
-        data = await state.get_data()
         acc = session.get(Account, data["account_id"])
 
-
-        if not verify_password(msg.text, acc.password):
-            await msg.answer("❌ Скасовано, невірний пароль", reply_markup=kb.account_kb)
-            await state.set_state(UserState.main_menu)
+        if not acc:
+            await msg.answer("❌ Акаунт не знайдено")
+            await state.clear()
             return
 
-    
+        # 🔐 перевірка пароля
+        if not verify_password(msg.text, acc.password):
+            await msg.answer("❌ Невірний пароль", reply_markup=kb.after_loggin_kb)
+            await state.set_state(UserState.after_loggin)
+            return
+
+        # 1 ВИДАЛЯЄМО БЕЗЗМІСТОВНІ ТРАНЗАКЦІЇ
+        session.query(Transaction).filter(
+            Transaction.account_id == acc.id,
+            Transaction.type.in_(["deposit", "withdraw"])
+        ).delete(synchronize_session=False)
+
+        # 2 ОНОВЛЮЄМО ПЕРЕКАЗИ, ДЕ ЦЕЙ АКАУНТ — ІНШИЙ БІК
+        session.query(Transaction).filter(
+            Transaction.related_account == acc.login
+        ).update(
+            {Transaction.related_account: "DELETED"},
+            synchronize_session=False
+        )
+
+        # 3 ОНОВЛЮЄМО ВЛАСНІ ПЕРЕКАЗИ АКАУНТА
+        session.query(Transaction).filter(
+            Transaction.account_id == acc.id,
+            Transaction.type.in_(["transfer_in", "transfer_out"])
+        ).update(
+            {
+                Transaction.account_id: None,
+                Transaction.login: "DELETED"
+            },
+            synchronize_session=False
+        )
+
+        # 4 ВИДАЛЯЄМО ПЕРЕКАЗИ, ДЕ ОБИДВА АКАУНТИ ВЖЕ ВИДАЛЕНІ
+        session.query(Transaction).filter(
+            Transaction.account_id == None,
+            Transaction.related_account == "DELETED",
+            Transaction.type.in_(["transfer_in", "transfer_out"])
+        ).delete(synchronize_session=False)
+
+
+
+        # 5 ВИДАЛЯЄМО САМ АКАУНТ
         session.delete(acc)
         session.commit()
 
     await state.clear()
-    await msg.answer("🗑️ Рахунок видалено", reply_markup=kb.main_kb)
+    await state.set_state(UserState.before_loggin)
+    await msg.answer("🗑️ Рахунок та історія оновлені", reply_markup=kb.before_loggin_kb)
 
 
 
@@ -347,7 +400,7 @@ async def delete_confirm_2(msg: types.Message, state: FSMContext):
 
 # --- ПЕРЕКАЗ ---
 
-@user.message(F.text == "🔁 Переказ", UserState.main_menu)
+@user.message(F.text == "🔁 Переказ", UserState.after_loggin)
 async def transfer_start(msg: types.Message, state: FSMContext):
     await state.set_state(TransferStates.target_login)
     await msg.answer("Введіть логін отримувача:")
@@ -363,14 +416,14 @@ async def transfer_target(msg: types.Message, state: FSMContext):
 @user.message(TransferStates.amount)
 async def transfer_finish(msg: types.Message, state: FSMContext):
     if not msg.text.replace(".", "", 1).isdigit():
-        await msg.answer("❌ Невірне число", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Невірне число", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     amount = Decimal(msg.text)
     if amount <= 0:
-        await msg.answer("❌ Сума має бути більшою за 0", reply_markup=kb.account_kb)
-        await state.set_state(UserState.main_menu)
+        await msg.answer("❌ Сума має бути більшою за 0", reply_markup=kb.after_loggin_kb)
+        await state.set_state(UserState.after_loggin)
         return
 
     data = await state.get_data()
@@ -380,13 +433,13 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
         receiver = session.query(Account).filter_by(login=data["target_login"]).first()
 
         if not receiver:
-            await msg.answer("❌ Отримувача не знайдено", reply_markup=kb.account_kb)
-            await state.set_state(UserState.main_menu)
+            await msg.answer("❌ Отримувача не знайдено", reply_markup=kb.after_loggin_kb)
+            await state.set_state(UserState.after_loggin)
             return
 
         if sender.balance < amount:
-            await msg.answer("❌ Недостатньо коштів", reply_markup=kb.account_kb)
-            await state.set_state(UserState.main_menu)
+            await msg.answer("❌ Недостатньо коштів", reply_markup=kb.after_loggin_kb)
+            await state.set_state(UserState.after_loggin)
             return
 
         final_amount = Decimal(amount)
@@ -403,10 +456,10 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
         await msg.answer(
             f"✅ Переказ виконано\n"
             f"{amount} {sender.currency} → {final_amount} {receiver.currency}",
-            reply_markup=kb.account_kb
+            reply_markup=kb.after_loggin_kb
         )
 
-    await state.set_state(UserState.main_menu)
+    await state.set_state(UserState.after_loggin)
 
     await log_transaction(
         session,
@@ -438,7 +491,7 @@ async def transfer_finish(msg: types.Message, state: FSMContext):
 
 # --- Історія транзакцій --- 
 
-@user.message(F.text == "📜 Історія", UserState.main_menu)
+@user.message(F.text == "📜 Історія", UserState.after_loggin)
 async def history(msg: types.Message, state: FSMContext):
     data = await state.get_data()
 
@@ -485,10 +538,10 @@ async def history(msg: types.Message, state: FSMContext):
 
 #--- Невідома команда ---
 
-@user.message(F.text, UserState.main_menu)
+@user.message(F.text, UserState.after_loggin)
 async def logout(msg: types.Message, state: FSMContext):
-    await msg.answer("❌ Невідома команда", reply_markup=kb.account_kb)
+    await msg.answer("❌ Невідома команда", reply_markup=kb.after_loggin_kb)
 
 @user.message(F.text)
 async def logout(msg: types.Message, state: FSMContext):
-    await msg.answer("❌ Невідома команда", reply_markup=kb.main_kb)
+    await msg.answer("❌ Невідома команда", reply_markup=kb.before_loggin_kb)

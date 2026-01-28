@@ -17,7 +17,8 @@ class AuthStates(StatesGroup):
 #--- ПІСЛЯ ВХОДУ ---
 
 class UserState(StatesGroup):
-    main_menu = State()
+    after_loggin = State()
+    before_loggin = State()
 
 
 

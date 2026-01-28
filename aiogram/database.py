@@ -2,6 +2,7 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy import create_engine
 from config import settings
 
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 class Base(DeclarativeBase):
     pass
@@ -16,6 +17,13 @@ sync_engine = create_engine(
 session_factory = sessionmaker(sync_engine,expire_on_commit=False,)
 
 
+"""create async engine and session factory."""
+# async_engine = create_async_engine(
+#     url=settings.DATABASE_URL_asyncpg,
+#     echo=False,
+# )
+
+# async_session_factory = async_sessionmaker(async_engine)
 
 """"create all tables in the database. (for 1 time use)"""
 # def create_tables_for_1_time():
@@ -26,13 +34,6 @@ session_factory = sessionmaker(sync_engine,expire_on_commit=False,)
 # create_tables_for_1_time()
 
 
-"""create async engine and session factory."""
-# async_engine = create_async_engine(
-#     url=settings.DATABASE_URL_asyncpg,
-#     echo=False,
-# )
-
-# async_session_factory = async_sessionmaker(async_engine)
 
 
 
